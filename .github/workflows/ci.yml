@@ -1,66 +1,175 @@
-# This workflow uses actions that are not certified by GitHub.
-# They are provided by a third-party and are governed by
-# separate terms of service, privacy policy, and support
-# documentation.
+name: Client Management CI/CD
 
-# This workflow lets you generate SLSA provenance file for your project.
-# The generation satisfies level 3 for the provenance requirements - see https://slsa.dev/spec/v0.1/requirements
-# The project is an initiative of the OpenSSF (openssf.org) and is developed at
-# https://github.com/slsa-framework/slsa-github-generator.
-# The provenance file can be verified using https://github.com/slsa-framework/slsa-verifier.
-# For more information about SLSA and how it improves the supply-chain, visit slsa.dev.
-
-name: SLSA generic generator
 on:
+  push:
+    branches:
+      - main
+      - feature/*
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
-  release:
-    types: [created]
 
 jobs:
+  # ----------------------------------------------------
+  # STAGE 1: BUILD (Build Docker images and save as artifacts)
+  # ----------------------------------------------------
   build:
     runs-on: ubuntu-latest
-    outputs:
-      digests: ${{ steps.hash.outputs.digests }}
-
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      # ========================================================
-      #
-      # Step 1: Build your artifacts.
-      #
-      # ========================================================
-      - name: Build artifacts
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Backend Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: deployment/docker/Dockerfile.backend
+          push: false
+          tags: client-backend:latest
+          outputs: type=docker,dest=/tmp/client-backend.tar
+
+      - name: Build Frontend Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: deployment/docker/Dockerfile.frontend
+          push: false
+          tags: client-frontend:latest
+          outputs: type=docker,dest=/tmp/client-frontend.tar
+
+      - name: Upload Backend Image Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: client-backend
+          path: /tmp/client-backend.tar
+          retention-days: 1
+
+      - name: Upload Frontend Image Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: client-frontend
+          path: /tmp/client-frontend.tar
+          retention-days: 1
+
+  # ----------------------------------------------------
+  # STAGE 2: TEST (Load images and run locally to test)
+  # ----------------------------------------------------
+  test:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Download Backend Image Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: client-backend
+          path: /tmp
+
+      - name: Download Frontend Image Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: client-frontend
+          path: /tmp
+
+      - name: Load Docker images
         run: |
-            # These are some amazing artifacts.
-            echo "artifact1" > artifact1
-            echo "artifact2" > artifact2
+          docker load --input /tmp/client-backend.tar
+          docker load --input /tmp/client-frontend.tar
 
-      # ========================================================
-      #
-      # Step 2: Add a step to generate the provenance subjects
-      #         as shown below. Update the sha256 sum arguments
-      #         to include all binaries that you generate
-      #         provenance for.
-      #
-      # ========================================================
-      - name: Generate subject for provenance
-        id: hash
+      - name: Run Backend Container
         run: |
-          set -euo pipefail
+          docker run -d --name backend-test -p 8000:8000 client-backend:latest
 
-          # List the artifacts the provenance will refer to.
-          files=$(ls artifact*)
-          # Generate the subjects (base64 encoded).
-          echo "hashes=$(sha256sum $files | base64 -w0)" >> "${GITHUB_OUTPUT}"
+      - name: Run Frontend Container
+        run: |
+          docker run -d --name frontend-test -p 80:80 client-frontend:latest
 
-  provenance:
-    needs: [build]
-    permissions:
-      actions: read   # To read the workflow path.
-      id-token: write # To sign the provenance.
-      contents: write # To add assets to a release.
-    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v1.4.0
-    with:
-      base64-subjects: "${{ needs.build.outputs.digests }}"
-      upload-assets: true # Optional: Upload to a new release
+      # - name: Verify Backend and Frontend container health
+      #   run: |
+      #     # Wait for services to start
+      #     sleep 5
+      #     # Test backend API
+      #     curl --fail -v http://localhost:8000/
+      #     # Test frontend landing page
+      #     curl --fail -v http://localhost:80/
+
+      - name: Stop Containers
+        if: always()
+        run: |
+          docker stop backend-test || true
+          docker stop frontend-test || true
+
+  # ----------------------------------------------------
+  # STAGE 3: DEPLOY (Log in to Docker Hub and push images)
+  # ----------------------------------------------------
+  deploy:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - name: Download Backend Image Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: client-backend
+          path: /tmp
+
+      - name: Download Frontend Image Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: client-frontend
+          path: /tmp
+
+      - name: Load Docker images
+        run: |
+          docker load --input /tmp/client-backend.tar
+          docker load --input /tmp/client-frontend.tar
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Tag and Push Backend Image to Docker Hub
+        run: |
+          DOCKER_USER=${{ secrets.DOCKER_USERNAME }}
+          COMMIT_SHA=${{ github.sha }}
+          BRANCH_NAME=${{ github.ref_name }}
+          SAFE_BRANCH=$(echo "$BRANCH_NAME" | sed 's/\//-/g')
+          
+          # Push commit SHA tag
+          docker tag client-backend:latest $DOCKER_USER/client-backend:${COMMIT_SHA:0:7}
+          docker push $DOCKER_USER/client-backend:${COMMIT_SHA:0:7}
+          
+          # Push branch name tag
+          docker tag client-backend:latest $DOCKER_USER/client-backend:$SAFE_BRANCH
+          docker push $DOCKER_USER/client-backend:$SAFE_BRANCH
+          
+          # Push latest tag if on main branch
+          if [ "$BRANCH_NAME" = "main" ]; then
+            docker tag client-backend:latest $DOCKER_USER/client-backend:latest
+            docker push $DOCKER_USER/client-backend:latest
+          fi
+
+      - name: Tag and Push Frontend Image to Docker Hub
+        run: |
+          DOCKER_USER=${{ secrets.DOCKER_USERNAME }}
+          COMMIT_SHA=${{ github.sha }}
+          BRANCH_NAME=${{ github.ref_name }}
+          SAFE_BRANCH=$(echo "$BRANCH_NAME" | sed 's/\//-/g')
+          
+          # Push commit SHA tag
+          docker tag client-frontend:latest $DOCKER_USER/client-frontend:${COMMIT_SHA:0:7}
+          docker push $DOCKER_USER/client-frontend:${COMMIT_SHA:0:7}
+          
+          # Push branch name tag
+          docker tag client-frontend:latest $DOCKER_USER/client-frontend:$SAFE_BRANCH
+          docker push $DOCKER_USER/client-frontend:$SAFE_BRANCH
+          
+          # Push latest tag if on main branch
+          if [ "$BRANCH_NAME" = "main" ]; then
+            docker tag client-frontend:latest $DOCKER_USER/client-frontend:latest
+            docker push $DOCKER_USER/client-frontend:latest
+          fi
