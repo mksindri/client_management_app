@@ -134,42 +134,13 @@ You can boot up the entire stack (Frontend, Backend, and Nginx reverse proxy) lo
    ```
 3. Access the application on `http://localhost:80` (where Nginx serves the React app and proxies `/api` calls directly to the FastAPI container).
 
----
+<img src="docs/images/client_app_home_page.png" alt="App Screenshot" width="500">
 
 ## CI/CD Pipeline Workflow
 
 The GitHub Actions configuration in `.github/workflows/ci.yml` is structured into three sequential phases to ensure maximum stability and zero-downtime deployment:
 
-```mermaid
-graph TD
-    subgraph Build Phase
-        A[Checkout Code] --> B[Docker Buildx Setup]
-        B --> C[Build Backend Image]
-        B --> D[Build Frontend Image]
-        C --> E[Upload Backend Tarball]
-        D --> F[Upload Frontend Tarball]
-    end
-
-    subgraph Test Phase
-        E --> G[Download Tarballs]
-        F --> G
-        G --> H[Load to Local Docker Daemon]
-        H --> I[Run Containers in Background]
-        I --> J[Run curl HTTP Healthchecks]
-        J --> K[Stop & Clean Containers]
-    end
-
-    subgraph Deploy Phase
-        K --> L[Download & Load Tarballs]
-        L --> M[Log in to Docker Hub]
-        M --> N[Tag Images: SHA, Branch, latest]
-        N --> O[Push Tagged Images to Docker Hub]
-    end
-
-    style Build Phase fill:#f9f,stroke:#333,stroke-width:2px
-    style Test Phase fill:#bbf,stroke:#333,stroke-width:2px
-    style Deploy Phase fill:#bfb,stroke:#333,stroke-width:2px
-```
+<img src="docs/images/ci_cd_pipline_execution.png" alt="App Screenshot" width="500">
 
 ### 1. Build
 * Builds the backend and frontend Docker images using `docker/build-push-action`.
