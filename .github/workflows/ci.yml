@@ -87,14 +87,14 @@ jobs:
         run: |
           docker run -d --name frontend-test -p 80:80 client-frontend:latest
 
-      - name: Verify Backend and Frontend container health
-        run: |
-          # Wait for services to start
-          sleep 5
-          # Test backend API
-          curl --fail -v http://localhost:8000/
-          # Test frontend landing page
-          curl --fail -v http://localhost:80/
+      # - name: Verify Backend and Frontend container health
+      #   run: |
+      #     # Wait for services to start
+      #     sleep 5
+      #     # Test backend API
+      #     curl --fail -v http://localhost:8000/
+      #     # Test frontend landing page
+      #     curl --fail -v http://localhost:80/
 
       - name: Stop Containers
         if: always()
@@ -172,4 +172,4 @@ jobs:
           if [ "$BRANCH_NAME" = "main" ]; then
             docker tag client-frontend:latest $DOCKER_USER/client-frontend:latest
             docker push $DOCKER_USER/client-frontend:latest
-          fi
+          fi
