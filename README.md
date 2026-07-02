@@ -134,13 +134,13 @@ You can boot up the entire stack (Frontend, Backend, and Nginx reverse proxy) lo
    ```
 3. Access the application on `http://localhost:80` (where Nginx serves the React app and proxies `/api` calls directly to the FastAPI container).
 
-<img src="docs/images/client_app_home_page.png" alt="App Screenshot" width="500">
+<img src="docs/images/client_app_home_page.png" alt="App Screenshot">
 
 ## CI/CD Pipeline Workflow
 
 The GitHub Actions configuration in `.github/workflows/ci.yml` is structured into three sequential phases to ensure maximum stability and zero-downtime deployment:
 
-<img src="docs/images/ci_cd_pipline_execution.png" alt="App Screenshot" width="500">
+<img src="docs/images/ci_cd_pipline_execution.png" alt="App Screenshot">
 
 ### 1. Build
 * Builds the backend and frontend Docker images using `docker/build-push-action`.
