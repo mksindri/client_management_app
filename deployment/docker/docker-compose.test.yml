@@ -1,0 +1,20 @@
+version: "3.9"
+
+services:
+
+  backend:
+    image: client-backend:latest
+    container_name: backend-test
+
+    ports:
+      - "8000:8000"
+
+  frontend:
+    image: client-frontend:latest
+    container_name: frontend-test
+
+    ports:
+      - "80:80"
+
+    depends_on:
+      - backend

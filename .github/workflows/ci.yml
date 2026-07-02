@@ -1,97 +1,175 @@
-name: Client Management CI
+name: Client Management CI/CD
 
 on:
   push:
     branches:
       - main
+      - feature/*
   pull_request:
     branches:
       - main
   workflow_dispatch:
 
-env:
-  REGISTRY: ghcr.io
-
 jobs:
-  build-backend:
+  # ----------------------------------------------------
+  # STAGE 1: BUILD (Build Docker images and save as artifacts)
+  # ----------------------------------------------------
+  build:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Log in to the Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-      - name: Extract metadata (tags, labels) for Docker
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ github.repository }}/client-backend
-          tags: |
-            type=ref,event=branch
-            type=sha,prefix=,suffix=,format=short
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
-
-      - name: Build and push Backend Docker image
+      - name: Build Backend Docker image
         uses: docker/build-push-action@v5
         with:
           context: .
           file: deployment/docker/Dockerfile.backend
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          push: false
+          tags: client-backend:latest
+          outputs: type=docker,dest=/tmp/client-backend.tar
 
-  build-frontend:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Log in to the Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract metadata (tags, labels) for Docker
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ github.repository }}/client-frontend
-          tags: |
-            type=ref,event=branch
-            type=sha,prefix=,suffix=,format=short
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
-
-      - name: Build and push Frontend Docker image
+      - name: Build Frontend Docker image
         uses: docker/build-push-action@v5
         with:
           context: .
           file: deployment/docker/Dockerfile.frontend
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          push: false
+          tags: client-frontend:latest
+          outputs: type=docker,dest=/tmp/client-frontend.tar
 
-# NOTE: If you prefer to push to Docker Hub instead of GitHub Container Registry (GHCR):
-# 1. Add your DOCKER_USERNAME and DOCKER_PASSWORD as secrets in your GitHub repository settings.
-# 2. Replace the login step with:
-#      - name: Log in to Docker Hub
-#        uses: docker/login-action@v3
-#        with:
-#          username: ${{ secrets.DOCKER_USERNAME }}
-#          password: ${{ secrets.DOCKER_PASSWORD }}
-# 3. Change images paths in `docker/metadata-action` steps to:
-#    images: ${{ secrets.DOCKER_USERNAME }}/client-backend (and /client-frontend)
+      - name: Upload Backend Image Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: client-backend
+          path: /tmp/client-backend.tar
+          retention-days: 1
+
+      - name: Upload Frontend Image Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: client-frontend
+          path: /tmp/client-frontend.tar
+          retention-days: 1
+
+  # ----------------------------------------------------
+  # STAGE 2: TEST (Load images and run locally to test)
+  # ----------------------------------------------------
+  test:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Download Backend Image Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: client-backend
+          path: /tmp
+
+      - name: Download Frontend Image Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: client-frontend
+          path: /tmp
+
+      - name: Load Docker images
+        run: |
+          docker load --input /tmp/client-backend.tar
+          docker load --input /tmp/client-frontend.tar
+
+      - name: Run Backend Container
+        run: |
+          docker run -d --name backend-test -p 8000:8000 client-backend:latest
+
+      - name: Run Frontend Container
+        run: |
+          docker run -d --name frontend-test -p 80:80 client-frontend:latest
+
+      - name: Verify Backend and Frontend container health
+        run: |
+          # Wait for services to start
+          sleep 5
+          # Test backend API
+          curl --fail -v http://localhost:8000/
+          # Test frontend landing page
+          curl --fail -v http://localhost:80/
+
+      - name: Stop Containers
+        if: always()
+        run: |
+          docker stop backend-test || true
+          docker stop frontend-test || true
+
+  # ----------------------------------------------------
+  # STAGE 3: DEPLOY (Log in to Docker Hub and push images)
+  # ----------------------------------------------------
+  deploy:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - name: Download Backend Image Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: client-backend
+          path: /tmp
+
+      - name: Download Frontend Image Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: client-frontend
+          path: /tmp
+
+      - name: Load Docker images
+        run: |
+          docker load --input /tmp/client-backend.tar
+          docker load --input /tmp/client-frontend.tar
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Tag and Push Backend Image to Docker Hub
+        run: |
+          DOCKER_USER=${{ secrets.DOCKER_USERNAME }}
+          COMMIT_SHA=${{ github.sha }}
+          BRANCH_NAME=${{ github.ref_name }}
+          SAFE_BRANCH=$(echo "$BRANCH_NAME" | sed 's/\//-/g')
+          
+          # Push commit SHA tag
+          docker tag client-backend:latest $DOCKER_USER/client-backend:${COMMIT_SHA:0:7}
+          docker push $DOCKER_USER/client-backend:${COMMIT_SHA:0:7}
+          
+          # Push branch name tag
+          docker tag client-backend:latest $DOCKER_USER/client-backend:$SAFE_BRANCH
+          docker push $DOCKER_USER/client-backend:$SAFE_BRANCH
+          
+          # Push latest tag if on main branch
+          if [ "$BRANCH_NAME" = "main" ]; then
+            docker tag client-backend:latest $DOCKER_USER/client-backend:latest
+            docker push $DOCKER_USER/client-backend:latest
+          fi
+
+      - name: Tag and Push Frontend Image to Docker Hub
+        run: |
+          DOCKER_USER=${{ secrets.DOCKER_USERNAME }}
+          COMMIT_SHA=${{ github.sha }}
+          BRANCH_NAME=${{ github.ref_name }}
+          SAFE_BRANCH=$(echo "$BRANCH_NAME" | sed 's/\//-/g')
+          
+          # Push commit SHA tag
+          docker tag client-frontend:latest $DOCKER_USER/client-frontend:${COMMIT_SHA:0:7}
+          docker push $DOCKER_USER/client-frontend:${COMMIT_SHA:0:7}
+          
+          # Push branch name tag
+          docker tag client-frontend:latest $DOCKER_USER/client-frontend:$SAFE_BRANCH
+          docker push $DOCKER_USER/client-frontend:$SAFE_BRANCH
+          
+          # Push latest tag if on main branch
+          if [ "$BRANCH_NAME" = "main" ]; then
+            docker tag client-frontend:latest $DOCKER_USER/client-frontend:latest
+            docker push $DOCKER_USER/client-frontend:latest
+          fi
