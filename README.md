@@ -121,7 +121,7 @@ The CMS is designed to manage client directory information (Name, Email, Mobile,
 4. **Open the application**:
    * Open your browser and navigate to `http://localhost:3000`. The CMS Dashboard should render, displaying the sidebar and client tables.
 
----
+<img src="docs/images/client_app_home_page.png" alt="App Screenshot">
 
 ## Running with Docker Compose
 
@@ -134,7 +134,7 @@ You can boot up the entire stack (Frontend, Backend, and Nginx reverse proxy) lo
    ```
 3. Access the application on `http://localhost:80` (where Nginx serves the React app and proxies `/api` calls directly to the FastAPI container).
 
-<img src="docs/images/client_app_home_page.png" alt="App Screenshot">
+---
 
 ## CI/CD Pipeline Workflow
 
